@@ -48,8 +48,8 @@ function recommendation(ex: Exercise, logs: Log[]): { title: string; text: strin
 }
 
 export function App() {
-  const [logs, setLogs] = useState<Log[]>(() => JSON.parse(localStorage.getItem('liftlog-logs') || JSON.stringify(seedLogs)));
-  const [weights, setWeights] = useState<number[]>(() => JSON.parse(localStorage.getItem('liftlog-weight') || '[72.1,72.4,72.8,73.0]'));
+  const [logs, setLogs] = useState<Log[]>(() => JSON.parse(localStorage.getItem('liftlog-logs') || (supabase ? '[]' : JSON.stringify(seedLogs))));
+  const [weights, setWeights] = useState<number[]>(() => JSON.parse(localStorage.getItem('liftlog-weight') || (supabase ? '[]' : '[72.1,72.4,72.8,73.0]')));
   const [selected, setSelected] = useState<Day>(dayForDate(today));
   const [view, setView] = useState<'today' | 'progress' | 'plan'>('today');
   const [workout, setWorkout] = useState(false);
