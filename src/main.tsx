@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { User } from '@supabase/supabase-js';
 import './styles.css';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
+import { CloudApp } from './CloudApp';
 
 type Day = 'PUSH' | 'PULL' | 'LEGS' | 'UPPER' | 'LOWER';
 type Exercise = { name: string; muscle: string; sets: number; min: number; max: number; weight: number; type?: 'compound' | 'isolation' };
@@ -42,21 +45,40 @@ function recommendation(ex: Exercise, logs: Log[]): { title: string; text: strin
   return { title: 'Add a rep', text: `Stay at ${prior.weight} kg and beat last time by one total rep.`, tone: 'steady', weight: prior.weight, reps: `${ex.min}–${ex.max}` };
 }
 
-function App() {
+export function App() {
   const [logs, setLogs] = useState<Log[]>(() => JSON.parse(localStorage.getItem('liftlog-logs') || JSON.stringify(seedLogs)));
   const [weights, setWeights] = useState<number[]>(() => JSON.parse(localStorage.getItem('liftlog-weight') || '[72.1,72.4,72.8,73.0]'));
   const [selected, setSelected] = useState<Day>(dayForDate(today));
   const [view, setView] = useState<'today' | 'progress' | 'plan'>('today');
   const [workout, setWorkout] = useState(false);
   const [toast, setToast] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
   useEffect(() => { localStorage.setItem('liftlog-logs', JSON.stringify(logs)); }, [logs]);
   useEffect(() => { localStorage.setItem('liftlog-weight', JSON.stringify(weights)); }, [weights]);
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    if (!supabase || !user) return;
+    Promise.all([
+      supabase.from('workout_logs').select('*').order('date', { ascending: false }),
+      supabase.from('bodyweight_entries').select('*').order('date', { ascending: true })
+    ]).then(([logResult, weightResult]) => {
+      if (!logResult.error && logResult.data?.length) setLogs(logResult.data.map((l: any) => ({ date: l.date, day: l.day, exercise: l.exercise, weight: Number(l.weight), reps: l.reps, rir: l.rir })));
+      if (!weightResult.error && weightResult.data?.length) setWeights(weightResult.data.map((w: any) => Number(w.weight)));
+    });
+  }, [user]);
   const current = plan[selected];
   const lastWorkout = logs.filter(l => l.day === selected).sort((a, b) => b.date.localeCompare(a.date))[0];
   const volume = logs.reduce((sum, l) => sum + l.weight * l.reps.reduce((a, b) => a + b, 0), 0);
   const notify = (s: string) => { setToast(s); window.setTimeout(() => setToast(''), 2800); };
   const exportData = (kind: 'csv' | 'json') => { const body = kind === 'json' ? JSON.stringify({ logs, weights }, null, 2) : ['date,workout,exercise,weight,reps,set,rir', ...logs.flatMap(l => l.reps.map((r, i) => `${l.date},${l.day},${l.exercise},${l.weight},${r},${i + 1},${l.rir ?? ''}`))].join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([body], { type: 'text/plain' })); a.download = `liftlog-export.${kind}`; a.click(); notify(`Exported ${kind.toUpperCase()} successfully`); };
   const saveExercise = (ex: Exercise, weight: number, reps: number[], rir: number) => { setLogs(l => [...l, { date: today.toISOString().slice(0, 10), day: selected, exercise: ex.name, weight, reps, rir }]); };
+  const saveBodyweight = async (v: number) => { setWeights(w => [...w, v]); if (supabase && user) { const { error } = await supabase.from('bodyweight_entries').insert({ user_id: user.id, weight: v, date: today.toISOString().slice(0, 10) }); if (error) notify(`Could not sync: ${error.message}`); } notify('Bodyweight saved'); };
   return <div className="app"><aside><div className="brand"><span className="brand-mark">↗</span><span>lift<span>log</span></span></div><div className="profile"><div className="avatar">AS</div><div><b>Abhishek</b><small>Building momentum</small></div><span className="dots">•••</span></div><nav><button className={view === 'today' ? 'active' : ''} onClick={() => setView('today')}>◉ <span>Today</span></button><button className={view === 'progress' ? 'active' : ''} onClick={() => setView('progress')}>⌁ <span>Progress</span></button><button className={view === 'plan' ? 'active' : ''} onClick={() => setView('plan')}>▦ <span>Workout plan</span></button></nav><div className="side-bottom"><div className="mini-card"><small>THIS WEEK</small><strong>3 <em>/ 5</em></strong><div className="week-dots"><i className="done"/><i className="done"/><i className="done"/><i/><i/></div><span>Keep your streak going</span></div><button className="export" onClick={() => exportData('csv')}>⇩ <span>Export data</span></button><button className="settings">⚙ <span>Settings</span></button></div></aside><main><header><div><p className="eyebrow">{fmt(today)}</p><h1>{view === 'today' ? 'Good morning, Abhishek.' : view === 'progress' ? 'Your progress' : 'Your workout plan'}</h1></div><div className="header-actions"><button className="icon-btn" onClick={() => notify('Notifications are all clear')}>♢</button><button className="primary" onClick={() => { setSelected(dayForDate(today)); setWorkout(true); }}>+ Log workout</button></div></header>{view === 'today' && <><section className="hero"><div><div className="day-pill" style={{ background: current.color }}>{current.emoji} {current.label.toUpperCase()} DAY</div><h2>Train with intention.<br/><i>Progress with proof.</i></h2><p>Your plan is ready. Focus on one good rep at a time.</p><button className="start" onClick={() => setWorkout(true)}>Start workout <span>→</span></button></div><div className="hero-art"><div className="orb orb-one"/><div className="orb orb-two"/><div className="hero-stat"><small>LAST SESSION</small><b>+6.1%</b><span>volume vs. prior</span></div><div className="line-art">⌁</div></div></section><div className="section-head"><div><p className="eyebrow">{current.focus}</p><h3>Today’s targets</h3></div><button className="text-btn" onClick={() => setView('plan')}>View full plan →</button></div><div className="exercise-grid">{current.exercises.slice(0, 4).map(ex => { const r = recommendation(ex, logs); return <ExerciseCard key={ex.name} ex={ex} rec={r} last={logs.find(l => l.exercise === ex.name)} onLog={() => setWorkout(true)} />; })}</div><section className="bottom-grid"><ProgressCard logs={logs} volume={volume} /><WeightCard weights={weights} onSave={(v) => { setWeights(w => [...w, v]); notify('Bodyweight saved'); }} /></section></>}{view === 'progress' && <ProgressView logs={logs} weights={weights} volume={volume} />}{view === 'plan' && <PlanView selected={selected} setSelected={setSelected} onStart={() => { setWorkout(true); setView('today'); }} />}</main>{workout && <WorkoutModal day={selected} logs={logs} onClose={() => setWorkout(false)} onSave={saveExercise} notify={notify} />}{toast && <div className="toast">✓ {toast}</div>}</div>;
 }
 
@@ -67,4 +89,4 @@ function ProgressView({ logs, weights, volume }: { logs: Log[]; weights: number[
 function PlanView({ selected, setSelected, onStart }: { selected: Day; setSelected: (d: Day) => void; onStart: () => void }) { return <><div className="plan-intro"><p className="eyebrow">YOUR WEEKLY SPLIT</p><h2>A simple plan that<br/><i>earns your progress.</i></h2><p>Five focused sessions. Enough stimulus to grow, enough recovery to keep showing up.</p></div><div className="day-tabs">{(['PUSH', 'PULL', 'LEGS', 'UPPER', 'LOWER'] as Day[]).map(d => <button className={selected === d ? 'selected' : ''} style={{ '--day-color': plan[d].color } as React.CSSProperties} onClick={() => setSelected(d)} key={d}><span>{plan[d].emoji}</span>{plan[d].label}</button>)}</div><div className="plan-detail"><div className="plan-detail-head"><div className="day-pill" style={{ background: plan[selected].color }}>{plan[selected].emoji} {selected} DAY</div><button className="primary" onClick={onStart}>Start this workout →</button></div><h3>{plan[selected].focus}</h3><div className="plan-table">{plan[selected].exercises.map((e, i) => <div className="plan-row" key={e.name}><span>{String(i + 1).padStart(2, '0')}</span><b>{e.name}</b><small>{e.muscle}</small><strong>{e.sets} × {e.min}–{e.max}</strong><em>{e.weight} kg</em></div>)}</div></div></> }
 function WorkoutModal({ day, logs, onClose, onSave, notify }: { day: Day; logs: Log[]; onClose: () => void; onSave: (ex: Exercise, weight: number, reps: number[], rir: number) => void; notify: (s: string) => void }) { const [idx, setIdx] = useState(0); const ex = plan[day].exercises[idx]; const rec = recommendation(ex, logs); const [weight, setWeight] = useState(String(rec.weight)); const [reps, setReps] = useState(Array(ex.sets).fill(String(ex.min))); const [rir, setRir] = useState('2'); const save = () => { onSave(ex, Number(weight), reps.map(Number), Number(rir)); if (idx < plan[day].exercises.length - 1) { setIdx(idx + 1); const next = plan[day].exercises[idx + 1]; setWeight(String(recommendation(next, logs).weight)); setReps(Array(next.sets).fill(String(next.min))); } else { onClose(); notify('Workout complete — great work'); } }; return <div className="modal-bg"><div className="modal"><div className="modal-head"><div><p className="eyebrow">{plan[day].label.toUpperCase()} · EXERCISE {idx + 1} / {plan[day].exercises.length}</p><h2>{ex.name}</h2></div><button className="close" onClick={onClose}>×</button></div><div className="modal-target"><span>TODAY’S TARGET</span><b>{rec.weight} kg × {ex.min}–{ex.max}</b><small>{rec.text}</small></div><label>Weight <div className="number"><input type="number" value={weight} onChange={e => setWeight(e.target.value)} /><span>kg</span></div></label><div className="set-label">REPS PER SET <span>RIR optional</span></div><div className="rep-grid">{reps.map((r, i) => <label key={i}>Set {i + 1}<input value={r} onChange={e => setReps(reps.map((x, j) => j === i ? e.target.value : x))} type="number" /></label>)}</div><label>Reps in reserve <select value={rir} onChange={e => setRir(e.target.value)}><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label><button className="save-workout" onClick={save}>{idx === plan[day].exercises.length - 1 ? 'Finish workout' : 'Save & next exercise'} <span>→</span></button></div></div> }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(<CloudApp />);
