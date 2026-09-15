@@ -32,16 +32,6 @@ export function CloudApp() {
       setDataReady(true);
     });
   }, [user]);
-  useEffect(() => {
-    if (!supabase || !user || !ready) return;
-    const original = localStorage.setItem.bind(localStorage);
-    localStorage.setItem = (key: string, value: string) => {
-      original(key, value);
-      if (key === 'liftlog-logs') { const rows = JSON.parse(value).map((l: any) => ({ ...l, user_id: user.id })); debug('syncing workout_logs:', rows.length, 'rows'); supabase.from('workout_logs').delete().eq('user_id', user.id).then(({ error }) => { debug('workout_logs delete:', error || 'ok'); if (rows.length) supabase.from('workout_logs').insert(rows).then(({ data, error: insertError }) => { debug('workout_logs insert:', { inserted: data?.length || rows.length, error: insertError || null }); if (insertError) debugError('workout_logs insert failed:', insertError); }); }); }
-      if (key === 'liftlog-weight') { const values = JSON.parse(value); const rows = values.map((weight: number, i: number) => ({ user_id: user.id, weight, date: new Date(Date.now() - (values.length - i - 1) * 86400000).toISOString().slice(0, 10) })); debug('syncing bodyweight_entries:', rows.length, 'rows'); supabase.from('bodyweight_entries').delete().eq('user_id', user.id).then(({ error }) => { debug('bodyweight_entries delete:', error || 'ok'); if (rows.length) supabase.from('bodyweight_entries').insert(rows).then(({ data, error: insertError }) => { debug('bodyweight_entries insert:', { inserted: data?.length || rows.length, error: insertError || null }); if (insertError) debugError('bodyweight_entries insert failed:', insertError); }); }); }
-    };
-    return () => { localStorage.setItem = original; };
-  }, [user, ready, dataReady]);
   const submit = async (e: FormEvent) => { e.preventDefault(); setMessage(''); if (!supabase) return; debug(mode, 'attempt:', email); const result = mode === 'signin' ? await supabase.auth.signInWithPassword({ email, password }) : await supabase.auth.signUp({ email, password }); debug(mode, 'result:', result.error || 'ok', result.data.user?.id || 'no user yet'); if (result.error) setMessage(result.error.message); else setMessage(mode === 'signup' ? 'Account created. Check your email if confirmation is enabled.' : 'Signed in.'); };
   if (!supabase) return <App />;
   if (user && !dataReady) return <div className="auth-shell"><div className="auth-box"><div className="brand"><span className="brand-mark">↗</span><span>lift<span>log</span></span></div><p>Loading your secure workout data…</p></div></div>;
